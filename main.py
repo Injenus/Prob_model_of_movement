@@ -1,47 +1,157 @@
 # ТОЛЬКО ДЛЯ ПИТОН 3 (где словарь упорядочен!) !!!
 # 0-зеленый 1-красный 2-черный 3- желтый 4-голубой (просто индикатор)
+import os
+import subprocess
 import csv
 import random
 import matplotlib.pyplot as plt
 
+# from PyQt5 import QtWidgets, uic
+# from PyQt5.QtSerialPort import QSerialPort, QSerialPortInfo
+# from PyQt5.QtCore import QIODevice
+# import sys
+# import time
+
+# app = QtWidgets.QApplication([])
+# ui = uic.loadUi('window.ui')
+# ui.setWindowTitle('Robot Controller')
+
+maps = ['Mainland', 'Greenland', 'Redland', 'Chessland', 'Mainland_2',
+        'Greenland_2', 'Redland_2', 'Chessland_2']
+#ui.map_list.addItems(maps)
+
 UNDETERMINED_START = True
 RANDOM_MOVE = True
-WORLD_NUMBER = 0  # номер карты
+WORLD_NUMBER = -765  # номер карты
+
+file_real_data = []
+file_predict_data = []
+file_real_pos = []
+file_predict_pos = []
 
 path = []
 if not RANDOM_MOVE:
-    for i in range(5000):
-        path.append(random.randint(1, 6))
-    path = [1, 1, 2, 2, 3, 2, 4, 6, 3, 2, 6, 6, 3, 1, 4, 5, 1, 1, 5, 6, 4, 2,
-            1, 3, 4, 6, 6, 5, 4, 3, 2, 2, 1]
+    # for i in range(5000):
+    #     path.append(random.randint(1, 6))
+    path = [3, 3, 3, 3, 3]
+    # если вводите случайно, убедитесь, что у робота есть отвал!!!
+    # (снега нахлебается и чего делать будете?... )
 
-world = []
-
-hit_color = 0.8
-miss_color = 0.2
+world_clear = []
 
 p_red = 0.8
 p_green = 0.75
 p_yellow = 0.60
 ratio = 1 / 3
-test_color = 0
+test_color = 3
 stone_counter = 0
 
 p_back = 0.05
 p_stay = 0.15
-p_forward = 1 - p_back - p_stay
 p_turn = 0.1
+
+p_forward = 1 - p_back - p_stay
 p_straight = 1 - 2 * p_turn
 p_exact = p_forward * p_straight
 
 color_error_prob = 0.2
 
-prob_tolerance = 0.01
+prob_tolerance = 0.01 # отличается ли макс. вероятность от медианной
 
-limit_step = 30000
+limit_step = 500
+
+fps, speed_koef = 14, 7 # int(fps/speed_koef)=скорость в ячейках в секунду
+
+can_go = False
+
+start, finish = [0, 0], [0, 0]
+if WORLD_NUMBER == 0 or WORLD_NUMBER == 4:
+    NAME = 'map0.csv'
+    start[0], start[1], finish[0], finish[1] = 0, 0, 5, 5
+elif WORLD_NUMBER == 1 or WORLD_NUMBER == 5:
+    NAME = 'map1.csv'
+    start[0], start[1], finish[0], finish[1] = 0, 0, 6, 2
+elif WORLD_NUMBER == 2 or WORLD_NUMBER == 6:
+    NAME = 'map2.csv'
+    start[0], start[1], finish[0], finish[1] = 0, 0, 1, 3
+elif WORLD_NUMBER == 3 or WORLD_NUMBER == 7:
+    NAME = 'map3.csv'
+    start[0], start[1], finish[0], finish[1] = 0, 0, 3, 3
+else:
+    NAME = 'map_bonus.csv'
+    start[0], start[1], finish[0], finish[1] = 1, 1, 5, 5
 
 
-def filter(data):
+def load_world(map_name, world):  # загрузка карты мира из файла
+    global stone_counter
+    try:
+        with open(map_name, newline='') as myFile:
+            reader = csv.reader(myFile, delimiter='/', quoting=csv.QUOTE_NONE)
+            for el in reader:
+                line = el[0].split(';')
+                for i, item in enumerate(line):
+                    line[i] = int(item)
+                for cell in line:
+                    if cell == 2:
+                        stone_counter += 1
+                world.append(line)
+    except NameError:
+        print('Такого мира нет!')
+        exit(0)
+
+
+def print_w(world): # форматированный вывод
+    print('The World:')
+    odd = True
+    for el in world:
+        odd = not odd
+        if odd:
+            print('  ', ' ', end='')
+        else:
+            print('  ', end='')
+        for item in el:
+            print(item, end='  ')
+        print()
+    print()
+
+
+if -1 < WORLD_NUMBER <8:
+    load_world(NAME, world_clear)
+else:
+    load_world(NAME[:-10] + '0.csv', world_clear)
+
+height = len(world_clear)
+width = len(world_clear[0])
+
+world_dirty = []
+if 3 < WORLD_NUMBER < 8:
+    load_world(NAME[:-4] + 'l.csv', world_dirty)
+    print_w(world_dirty)
+    NAME = NAME[:-4] + 'ld.jpg'
+elif -1 < WORLD_NUMBER < 4:
+    world_dirty = world_clear
+    print_w(world_clear)
+    NAME = NAME[:-4] + 'd.jpg'
+else:
+    load_world(NAME, world_dirty)
+    print_w(world_dirty)
+    NAME = NAME[:-4] + 'd.jpg'
+
+print('Сугробов на карте:', stone_counter, '\n')
+probability = [[1 / (height * width - 0 * stone_counter)] * width for i in
+               range(
+                   height)]  # робот же не знает, сколько сугробов и где они,
+
+
+# поэтому для него изначально всегда одна и та же картина вероятностей
+
+# for i in range(height):
+#     for j in range(width):
+#         if world_clear[i][j] == '2':
+#             probability[i][j] = 0
+
+
+def filter(data): # фильтр данных графика
     top = max(data)
     for i in range(len(data)):
         try:
@@ -75,7 +185,7 @@ def filter(data):
                 data[i] = 0
 
 
-def rad_coord(center, rad):
+def rad_coord(center, rad): # определение списка ячеек на заданном расстоянии от данной
     is_even = True if not (center[0] % 2) else False
     if is_even:
         if rad == 1:  # (a,b)
@@ -219,102 +329,57 @@ def rad_coord(center, rad):
             return [((center[0] + 4) % height, (center[1] + 4) % width)]
 
 
-def distance(cell1, cell2):
+def distance(cell1, cell2): # вычисление расстояния между двумя ячейками
     for i in range(1, 7):
         if (cell2[0], cell2[1]) in rad_coord(cell1, i):
             return i
     else:
-        return 'err'
+        return 0
 
 
-def print_p(array):
+def print_p(array): # форматированный вывод
     odd = True
     for stroka in array:
         odd = not odd
         if odd:
             print('   ', '   ',
-                  "   ".join(['{:.3f}'.format(x) for x in stroka]))
+                  "   ".join(['{:.4f}'.format(x) for x in stroka]))
         else:
-            print('   ', "   ".join(['{:.3f}'.format(x) for x in stroka]))
+            print('   ', "   ".join(['{:.4f}'.format(x) for x in stroka]))
     print()
 
 
-def print_t(array):
+def print_t(array): # устаревший форматированный вывод
     for el in array:
         print(el)
     print()
 
 
-start, finish = [0, 0], [0, 0]
-if WORLD_NUMBER == 1:
-    NAME = 'map1.csv'
-    start[0], start[1], finish[0], finish[1] = 2, 3, 5, 6
-elif WORLD_NUMBER == 2:
-    NAME = 'map2.csv'
-    start[0], start[1], finish[0], finish[1] = 2, 3, 5, 6
-elif WORLD_NUMBER == 3:
-    NAME = 'map3.csv'
-    start[0], start[1], finish[0], finish[1] = 2, 3, 5, 6
-elif WORLD_NUMBER == 0:
-    NAME = 'map0.csv'
-    start[0], start[1], finish[0], finish[1] = 0, 0, 5, 5
-else:
-    NAME = 'doesn`t_exist'
-
-try:
-    with open(NAME, newline='') as myFile:
-        reader = csv.reader(myFile, delimiter='/', quoting=csv.QUOTE_NONE)
-        for el in reader:
-            line = el[0].split(';')
-            for i, item in enumerate(line):
-                line[i] = int(item)
-            for cell in line:
-                if cell == '2':
-                    stone_counter += 1
-            world.append(line)
-except NameError:
-    print('Такого мира нет!')
-    exit(0)
-height = len(world)
-width = len(world[0])
-
-probability = [[1 / (height * width - stone_counter)] * width for i in
-               range(height)]
-for i in range(height):
-    for j in range(width):
-        if world[i][j] == '2':
-            probability[i][j] = 0
-
-print('The World:')
-odd = True
-for el in world:
-    odd = not odd
-    if odd:
-        print('  ', ' ', end='')
-    else:
-        print('  ', end='')
-    for item in el:
-        print(item, end='  ')
-    print()
-print()
-
-
 # printt(probability)
 # print('########################')
 
-def sense(prob, color):
+def sense(prob, color): # фукнция сенса цвета
     new_probability = [[] * width for i in range(height)]
     summ = 0
     # for i in range(height):
     #     for j in range(width):
-    #         match = (color == world[i][j])
+    #         match = (color == world_clear[i][j])
     #         new_probability[i].append(
     #             prob[i][j] * (match * hit_color + (1 - match) * miss_color))
     #         summ += new_probability[i][j]
 
     for i in range(height):
         for j in range(width):
-            if world[i][j] == 0:
+            under_col = world_clear[i][j]
+            # if under_col == 2:  # если оказалсиь на стене
+            #     print("НА СТЕНЕ!!!!!!!!")
+            #     under_col = random.randint(3, 5)
+            #     if under_col == 4:
+            #         under_col = 0
+            #     elif under_col == 5:
+            #         under_col = 1
+
+            if under_col == 0:
                 if color == 0:
                     new_probability[i].append(prob[i][j] * p_green)
                 elif color == 1:
@@ -323,7 +388,7 @@ def sense(prob, color):
                 elif color == 3:
                     new_probability[i].append(
                         prob[i][j] * (1 - p_green) * (1 - ratio))
-            elif world[i][j] == 1:
+            elif under_col == 1:
                 if color == 0:
                     new_probability[i].append(prob[i][j] * (1 - p_red) * ratio)
                 elif color == 1:
@@ -331,7 +396,7 @@ def sense(prob, color):
                 elif color == 3:
                     new_probability[i].append(
                         prob[i][j] * (1 - p_red) * (1 - ratio))
-            elif world[i][j] == 3:
+            elif under_col == 3:
                 if color == 0:
                     new_probability[i].append(
                         prob[i][j] * (1 - p_yellow) * (1 - ratio))
@@ -340,6 +405,7 @@ def sense(prob, color):
                         prob[i][j] * (1 - p_yellow) * ratio)
                 elif color == 3:
                     new_probability[i].append(prob[i][j] * p_yellow)
+
             summ += new_probability[i][j]
 
     # print(summ)
@@ -352,12 +418,100 @@ def sense(prob, color):
     return new_probability
 
 
+def sense_stone(pos, cur_cell, direc): # функция сенса сугроба
+    global can_go
+    new_pos = [[] * width for i in range(height)]
+    if cur_cell[0] % 2 == 0:
+        if direc == 1:
+            target_cell = [(cur_cell[0] - 1) % height, (cur_cell[1]) % width]
+        elif direc == 2:
+            target_cell = [(cur_cell[0]) % height, (cur_cell[1] + 1) % width]
+        elif direc == 3:
+            target_cell = [(cur_cell[0] + 1) % height, (cur_cell[1]) % width]
+        elif direc == 4:
+            target_cell = [(cur_cell[0] + 1) % height,
+                           (cur_cell[1] - 1) % width]
+        elif direc == 5:
+            target_cell = [(cur_cell[0]) % height, (cur_cell[1] - 1) % width]
+        else:  # 6
+            target_cell = [(cur_cell[0] - 1) % height,
+                           (cur_cell[1] - 1) % width]
+    else:
+        if direc == 1:
+            target_cell = [(cur_cell[0] - 1) % height,
+                           (cur_cell[1] + 1) % width]
+        elif direc == 2:
+            target_cell = [(cur_cell[0]) % height, (cur_cell[1] + 1) % width]
+        elif direc == 3:
+            target_cell = [(cur_cell[0] + 1) % height,
+                           (cur_cell[1] + 1) % width]
+        elif direc == 4:
+            target_cell = [(cur_cell[0] + 1) % height, (cur_cell[1]) % width]
+        elif direc == 5:
+            target_cell = [(cur_cell[0]) % height, (cur_cell[1] - 1) % width]
+        else:  # 6
+            target_cell = [(cur_cell[0] - 1) % height, (cur_cell[1]) % width]
+
+
+
+    if predict_pos[0] % 2 == 0:
+        if direc == 1:
+            predict_target_cell = [(predict_pos[0] - 1) % height, (predict_pos[1]) % width]
+        elif direc == 2:
+            predict_target_cell = [(predict_pos[0]) % height, (predict_pos[1] + 1) % width]
+        elif direc == 3:
+            predict_target_cell = [(predict_pos[0] + 1) % height, (predict_pos[1]) % width]
+        elif direc == 4:
+            predict_target_cell = [(predict_pos[0] + 1) % height,
+                           (predict_pos[1] - 1) % width]
+        elif direc == 5:
+            predict_target_cell = [(predict_pos[0]) % height, (predict_pos[1] - 1) % width]
+        else:  # 6
+            predict_target_cell = [(predict_pos[0] - 1) % height,
+                           (predict_pos[1] - 1) % width]
+    else:
+        if direc == 1:
+            predict_target_cell = [(predict_pos[0] - 1) % height,
+                           (predict_pos[1] + 1) % width]
+        elif direc == 2:
+            predict_target_cell = [(predict_pos[0]) % height, (predict_pos[1] + 1) % width]
+        elif direc == 3:
+            predict_target_cell = [(predict_pos[0] + 1) % height,
+                           (predict_pos[1] + 1) % width]
+        elif direc == 4:
+            predict_target_cell = [(predict_pos[0] + 1) % height, (predict_pos[1]) % width]
+        elif direc == 5:
+            predict_target_cell = [(predict_pos[0]) % height, (predict_pos[1] - 1) % width]
+        else:  # 6
+            predict_target_cell = [(predict_pos[0] - 1) % height, (predict_pos[1]) % width]
+
+    if world_dirty[target_cell[0]][target_cell[1]] == 2:
+        can_go = False
+        for i in range(height):
+            for j in range(width):
+                if i == predict_target_cell[0] and j == predict_target_cell[1]:
+                    new_pos[i].append(0)
+                else:
+                    new_pos[i].append(pos[i][j])
+        for i in range(height):
+            for j in range(width):
+                new_pos[i][j] += pos[predict_target_cell[0]][predict_target_cell[1]] / (
+                        height * width - 1)
+        new_pos[predict_target_cell[0]][predict_target_cell[1]] = 0
+    else:
+        can_go = True
+        for i in range(len(pos)):
+            for j in range(len(pos[i])):
+                new_pos[i].append(pos[i][j])
+    return new_pos
+
+
 posterior_probability = sense(probability, test_color)
 print('Вероятность с учётом цвета ', test_color, ':', sep='')
 print_p(posterior_probability)
 
 
-def change_color(cell):
+def change_color(cell): # функция смены цвета, подаваемого на датчик
     r = random.randint(0, 1)
     if int(cell) == 0 and not r:
         return 1
@@ -373,7 +527,7 @@ def change_color(cell):
         return 1
 
 
-def maxs_coords(lst):
+def maxs_coords(lst): # нахождение всех ячеек с наибольшими вероятностями
     precison = 10
     for i in range(len(lst)):
         for j in range(len(lst[i])):
@@ -405,7 +559,7 @@ def maxs_coords(lst):
     return result
 
 
-def median(lst):
+def median(lst): # нахождение медианы в матрице вероятностей
     new_lst = []
     if type(lst[0]) == list:
         for i in range(len(lst)):
@@ -422,7 +576,7 @@ def median(lst):
             len(new_lst) // 2 - 1]) / 2
 
 
-def argmax(pos):
+def argmax(pos): # нахождение предсказанного положения робота
     global predict_pos
     coord = [0, 0]
     global max_prob
@@ -485,65 +639,79 @@ def argmax(pos):
         return temp[nm]
 
 
+def round_data(pos): # функция округления данных
+    for i in range(len(pos)):
+        for j in range(len(pos[i])):
+            pos[i][j] = round(pos[i][j], 1)
+    return pos
+
+
 if UNDETERMINED_START:
     position = [[1 / (width * height)] * width for i in range(height)]
     predict_pos = [random.randint(0, 7), random.randint(0, 7)]
     print('Робот случайно считает, что он в', predict_pos)
     max_prob = position[0][0]
+    file_predict_data.append(position)
+    file_real_pos.append(start)
+    file_predict_pos.append(predict_pos)
 else:
     position = [[0] * width for i in range(height)]
     position[start[0]][start[1]] = 1
     predict_pos = argmax(position)
     max_prob = 1
+    file_predict_data.append(position)
+    file_real_pos.append(start)
+    file_predict_pos.append(start)
 even_flag = not (start[0] % 2)
 
 real_pos = [start[0], start[1]]
 
 
-def test_move_up_down():
-    p = [[0] * width for i in range(height)]
-    for i in range(height):
-        for j in range(width):
-            if j == (real_pos[1] + i // 2 - real_pos[0] // 2) % 8 or j == (
-                    real_pos[1] + i // 2 + 4 - real_pos[0] // 2) % 8:
-                p[i][j] = 1
-
-
-#     print_t(p)
-#     print('sfgfdgf')
-# test_move_up_down()
-
-
-def test_move_diagonal():
-    p = [[0] * width for i in range(height)]
-    for i in range(height):
-        for j in range(width):
-            if j == (real_pos[1] - (i + 1) // 2 + (
-                    real_pos[0] - 1) // 2 + 1) % 8 or j == (
-                    real_pos[1] - (i + 1) // 2 + 4 + (
-                    real_pos[0] - 1) // 2 + 1) % 8:
-                p[i][j] = 1
-
-
-#     print_t(p)
-#     print('sfgfdgf')
-# test_move_diagonal()
-
-# real_pos = [1, 6]
-# even_flag = not (real_pos[0] % 2)
-
-
-def test_move_horiz():
-    p = [[0] * width for i in range(height)]
-    for i in range(height):
-        for j in range(width):
-            if i == real_pos[0]:
-                p[i][j] = 1
-    # print_t(p)
-    # print('sfgfdgf')
-
-
-# test_move_horiz()
+#### ТЕСТЫ ОТРИСОВКИ ТРАЕКТОРИЙ
+# def test_move_up_down():
+#     p = [[0] * width for i in range(height)]
+#     for i in range(height):
+#         for j in range(width):
+#             if j == (real_pos[1] + i // 2 - real_pos[0] // 2) % 8 or j == (
+#                     real_pos[1] + i // 2 + 4 - real_pos[0] // 2) % 8:
+#                 p[i][j] = 1
+#
+#
+# #     print_t(p)
+# #     print('sfgfdgf')
+# # test_move_up_down()
+#
+#
+# def test_move_diagonal():
+#     p = [[0] * width for i in range(height)]
+#     for i in range(height):
+#         for j in range(width):
+#             if j == (real_pos[1] - (i + 1) // 2 + (
+#                     real_pos[0] - 1) // 2 + 1) % 8 or j == (
+#                     real_pos[1] - (i + 1) // 2 + 4 + (
+#                     real_pos[0] - 1) // 2 + 1) % 8:
+#                 p[i][j] = 1
+#
+#
+# #     print_t(p)
+# #     print('sfgfdgf')
+# # test_move_diagonal()
+#
+# # real_pos = [1, 6]
+# # even_flag = not (real_pos[0] % 2)
+#
+#
+# def test_move_horiz():
+#     p = [[0] * width for i in range(height)]
+#     for i in range(height):
+#         for j in range(width):
+#             if i == real_pos[0]:
+#                 p[i][j] = 1
+#     # print_t(p)
+#     # print('sfgfdgf')
+#
+#
+# # test_move_horiz()
 
 sign = lambda x: x // abs(x)  # получаем знак числа
 
@@ -551,15 +719,15 @@ base_point = 0
 p_sum_base_point = 0
 
 
-def copy_list_2d(lst):
+def copy_list_2d(lst): # создаёт новый массив, равный заданному (а не ссылку на него!)
     new_lst = [[] * len(lst[0]) for i in range(len(lst))]
     for i in range(len(lst)):
         for el in lst[i]:
             new_lst[i].append(el)
     return new_lst
 
-
-def move_horiz(pos, direc, main):  # direc < 0 - назад, direc > 0 - вперёд
+# direc < 0 - назад, direc > 0 - вперёд
+def move_horiz(pos, direc, main):  # вычисление вероятностей по горизонтальным траекториям
     global base_point
     global p_sum_base_point
     direc = sign(direc)
@@ -604,7 +772,7 @@ def move_horiz(pos, direc, main):  # direc < 0 - назад, direc > 0 - впе�
 # диагональ increas - такая, как возрастающая прямая
 # диагональ decreas - такая, как убывающая прямая (ранее была up_down)
 
-def move_increas_diag(pos, direc, main):
+def move_increas_diag(pos, direc, main): # выч. вер. по диагоналям_1
     global base_point
     global p_sum_base_point
     direc = sign(direc)
@@ -687,7 +855,7 @@ def move_increas_diag(pos, direc, main):
     return pos_new
 
 
-def move_decreas_dig(pos, direc, main):
+def move_decreas_dig(pos, direc, main): # выч. вер. по диагоналям_2
     global base_point
     global p_sum_base_point
     direc = sign(direc)
@@ -776,12 +944,32 @@ print('Исходные координаты: ', start, '; робот счита
       sep='')
 print_p(position)
 
+rl_pstn_for_file = [[0] * width for i in range(height)]
+rl_pstn_for_file[start[0]][start[1]] = 1
+file_real_data.append(rl_pstn_for_file)
 
-def move(m_type=0):
+case = 0
+
+
+def move(m_type=0): # функция движения
+    global case
     global position
+    global can_go
     if not m_type:
-        case = random.randint(1, 6)
+        while (not can_go):
+            case = random.randint(1, 6)
+            can_go = True
+            print('Решил ехать "', case, '", ', sep='', end='')
+            position = sense_stone(position, real_pos, case)
+            if can_go:
+                print("и туда можно!")
+            else:
+                print("но там сугроб!")
+                print("В резльтате:")
+                print_p(position)
         path.append(case)
+        # print('В итоге выбрал "', case, '", ', 'после чего:', sep='')
+        # print_p(position)
     else:
         case = m_type
     if case == 1:
@@ -823,9 +1011,10 @@ def move(m_type=0):
     else:
         print('Невозможно!')
         exit(0)
-    measurment.append(world[real_pos[0]][real_pos[1]])
+    measurment.append(world_clear[real_pos[0]][real_pos[1]]) # фомрмируем массив данных для датчика цвета
+    can_go = False
 
-
+# разные счётчики
 mismatch_counter = 0
 inter_mismatch_counter = 0
 miscolor_counter = 0
@@ -833,7 +1022,9 @@ finish_counter = 0
 step = 0
 pos_error = []
 value_max_prob = []
+pos_error.append(distance(real_pos, predict_pos))
 
+# СИМУЛЯЦИЯ
 if RANDOM_MOVE:
     while (step < limit_step):
         # for gg in range(509):
@@ -845,7 +1036,7 @@ if RANDOM_MOVE:
 
         value_max_prob.append(max_prob)
         move()
-        print('Движение "', path[step], '":', sep='')
+        print('После движения "', path[step], '":', sep='')
         print_p(position)
         predict_pos = argmax(position)
         print('Действительные координаты: ', real_pos,
@@ -865,13 +1056,23 @@ if RANDOM_MOVE:
         else:
             position = sense(position, real_color)
             print('Сенсим цвет. Реальный цвет: ', real_color,
-                  ', и робот с этим согласен', sep='')
+                  ', и робот с этим согласен.', sep='')
+
+        file_predict_data.append(position)
+        rl_pstn_for_file = [[0] * width for i in range(height)]
+        rl_pstn_for_file[real_pos[0]][real_pos[1]] = 1
+        file_real_data.append(rl_pstn_for_file)
 
         print_p(position)
         predict_pos = argmax(position)
         print('Действительные координаты: ', real_pos,
               '; робот считает, что он в: ',
               predict_pos, '\n', sep='')
+
+        file_real_pos.append([real_pos[0], real_pos[1]])
+        # print(file_real_pos)
+        file_predict_pos.append(predict_pos)
+        # print(file_predict_pos)
 
         if real_pos != predict_pos:
             mismatch_counter += 1
@@ -907,7 +1108,7 @@ else:
 
         value_max_prob.append(max_prob)
         move(go)
-        print('Движение "', path[step], '":', sep='')
+        print('После движения "', path[step], '":', sep='')
         print_p(position)
         predict_pos = argmax(position)
         print('Действительные координаты: ', real_pos,
@@ -927,13 +1128,23 @@ else:
         else:
             position = sense(position, real_color)
             print('Сенсим цвет. Реальный цвет: ', real_color,
-                  ', и робот с этим согласен', sep='')
+                  ', и робот с этим согласен.', sep='')
+
+        file_predict_data.append(position)
+        rl_pstn_for_file = [[0] * width for i in range(height)]
+        rl_pstn_for_file[real_pos[0]][real_pos[1]] = 1
+        file_real_data.append(rl_pstn_for_file)
 
         print_p(position)
         predict_pos = argmax(position)
         print('Действительные координаты: ', real_pos,
               '; робот считает, что он в: ',
               predict_pos, '\n', sep='')
+
+        file_real_pos.append([real_pos[0], real_pos[1]])
+        # print(file_real_pos)
+        file_predict_pos.append([predict_pos[0], predict_pos[1]])
+        # print(file_predict_pos)
 
         if real_pos != predict_pos:
             mismatch_counter += 1
@@ -943,13 +1154,14 @@ else:
 
         step += 1
 
+# ВЫВОД ИНФОРМАЦИИ
 if UNDETERMINED_START:
     print('Робот изначально не знал своё местоположение.')
 else:
     print('Робот изначально знал своё местоположение.')
 print('Вероятность точного перемещения робота (куда он хотел):',
       '{:.3f}'.format(p_exact))
-print('Вероятность ложного определения цвета: ',
+print('Вероятность ложного считывания цвета: ',
       '{:.3f}'.format(color_error_prob))
 print('Робот проехал ячеек:', step)
 print('Ошибок датчка цвета:', miscolor_counter)
@@ -961,6 +1173,61 @@ print('Данные датчика:', measurment)
 print('Ошибки', pos_error)
 print('Вероятности', value_max_prob)
 
+# ЗАПИСЬ ДАННЫХ В ФАЙЛЫ
+with open('simulation/predict_data.csv', 'w', newline='') as r_f:
+    writer = csv.writer(r_f, delimiter=',')
+    for i, pos in enumerate(file_predict_data):
+        for row in file_predict_data[i]:
+            writer.writerow(row)
+        # writer.writerow('#')
+# with open('simulation/predict_data.csv') as r_f:
+#     reader = csv.reader(r_f, delimiter=',')
+#     for row in reader:
+#         print(row)
+
+with open('simulation/real_data.csv', 'w', newline='') as r_f:
+    writer = csv.writer(r_f, delimiter=',')
+    for i, pos in enumerate(file_real_data):
+        for row in file_real_data[i]:
+            writer.writerow(row)
+        # writer.writerow('#')
+# with open('simulation/real_data.csv') as r_f:
+#     reader = csv.reader(r_f, delimiter=',')
+#     for row in reader:
+#         print(row)
+
+with open('simulation/data.csv', 'w', newline='') as r_f:
+    writer = csv.writer(r_f, delimiter=',')
+    writer.writerow([step + 1])
+    writer.writerow([NAME])
+    writer.writerow([height])
+    writer.writerow([width])
+    writer.writerow([fps])
+    writer.writerow([speed_koef])
+# with open('simulation/data.csv') as r_f:
+#     reader = csv.reader(r_f, delimiter=',')
+#     for row in reader:
+#         print(row)
+
+with open('simulation/real_pos.csv', 'w', newline='') as r_f:
+    writer = csv.writer(r_f, delimiter=',')
+    for row in file_real_pos:
+        writer.writerow(row)
+# with open('simulation/real_pos.csv') as r_f:
+#     reader = csv.reader(r_f, delimiter=',')
+#     for row in reader:
+#         print(row)
+
+with open('simulation/predict_pos.csv', 'w', newline='') as r_f:
+    writer = csv.writer(r_f, delimiter=',')
+    for row in file_predict_pos:
+        writer.writerow(row)
+# with open('simulation/predict_pos.csv') as r_f:
+#     reader = csv.reader(r_f, delimiter=',')
+#     for row in reader:
+#         print(row)
+
+# ВЫВОД ГРАФИКОВ
 plt.figure(
     'Зависимость ошибки системы навигации от пройденного пути (фактически от времени)')
 plt.subplot(2, 2, 1)
@@ -968,7 +1235,7 @@ plt.title('Зависимость ошибки системы навигации
 plt.ylabel('Расстояние между действительным положением и вычисляемым')
 plt.xlabel(
     'Время в единицах равных времени проезда на 1 ячейку')
-x = [i for i in range(step)]
+x = [i for i in range(step + 1)]
 plt.plot(x, pos_error)
 plt.grid()
 
@@ -979,7 +1246,7 @@ plt.title(
     'Фильтрованная зависимость ошибки системы навигации от времени')
 plt.ylabel('Условные единицы ошибки')
 plt.xlabel('Время в единицах равных времени проезда на 1 ячейку')
-x = [i for i in range(step)]
+x = [i for i in range(step + 1)]
 plt.plot(x, pos_error)
 plt.grid()
 
@@ -1006,5 +1273,14 @@ plt.xlabel(
 x = [i for i in range(step)]
 plt.plot(x, value_max_prob)
 plt.grid()
+
+# os.system(
+#     r"C:/Users/injen/Desktop/PyProjects/Hausaufgabe2/simulation/simulation.exe")
+# try:
+#     os.startfile("C:/Users/injen/Desktop/PyProjects/Hausaufgabe2/simulation/simulation.exe")
+# except:
+#     os.startfile(
+#         "C:/Users/injen/Desktop/PyProjects/Hausaufgabe2/simulation/simulation.pde")
+# os.startfile("C:/VMLAB/bin/VMLAB.EXE")
 
 plt.show()
