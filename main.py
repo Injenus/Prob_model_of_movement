@@ -22,7 +22,7 @@ maps = ['Mainland', 'Greenland', 'Redland', 'Chessland', 'Mainland_2',
 
 UNDETERMINED_START = True
 RANDOM_MOVE = True
-WORLD_NUMBER = -765  # номер карты
+WORLD_NUMBER = 7  # номер карты
 
 file_real_data = []
 file_predict_data = []
@@ -1053,10 +1053,12 @@ if RANDOM_MOVE:
             print('Сенсим цвет. Реальный цвет: ', real_color,
                   ', а робот считает, что: ', rob_color, sep='')
             miscolor_counter += 1
+            curr_color=rob_color
         else:
             position = sense(position, real_color)
             print('Сенсим цвет. Реальный цвет: ', real_color,
                   ', и робот с этим согласен.', sep='')
+            curr_color=real_color
 
         file_predict_data.append(position)
         rl_pstn_for_file = [[0] * width for i in range(height)]
@@ -1081,8 +1083,8 @@ if RANDOM_MOVE:
             pos_error.append(0)
 
         if int(
-                real_color) == 3 and max_prob > 0.2 and predict_pos == finish or int(
-            real_color) != 3 and max_prob > 0.8 and predict_pos == finish:
+                curr_color) == 3 and max_prob > 0.2 and predict_pos == finish or int(
+            curr_color) != 3 and max_prob > 0.8 and predict_pos == finish:
             print('Доехали до финиша! Робот распознал его с',
                   finish_counter + 1,
                   'раза.')
@@ -1125,10 +1127,12 @@ else:
             print('Сенсим цвет. Реальный цвет: ', real_color,
                   ', а робот считает, что: ', rob_color, sep='')
             miscolor_counter += 1
+            curr_color=rob_color
         else:
             position = sense(position, real_color)
             print('Сенсим цвет. Реальный цвет: ', real_color,
                   ', и робот с этим согласен.', sep='')
+            curr_color=real_color
 
         file_predict_data.append(position)
         rl_pstn_for_file = [[0] * width for i in range(height)]
